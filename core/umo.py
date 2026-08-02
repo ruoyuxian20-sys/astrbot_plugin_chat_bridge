@@ -8,7 +8,8 @@ def group_umo_from_example(example_umo: str, group_id: str) -> str:
     """按群号构造群会话 UMO。
 
     平台与群会话前缀从 ``example_umo``（通常是当前事件的 UMO）推断：
-    例如 ``aiocqhttp:GroupMessage:group_555`` → 平台 ``aiocqhttp``、前缀 ``group_``。
+    - ``aiocqhttp:GroupMessage:group_555`` → 前缀 ``group_``
+    - ``巴巴萝丝:GroupMessage:1027774611`` → 纯群号，无前缀
     """
     group_id = str(group_id).strip()
     if not group_id.isdigit():
@@ -18,8 +19,12 @@ def group_umo_from_example(example_umo: str, group_id: str) -> str:
     prefix = "group_"
     if len(parts) >= 3:
         session = parts[-1]
-        for candidate in _GROUP_PREFIXES:
-            if session.startswith(candidate):
-                prefix = candidate
-                break
+        if session.isdigit():
+            # 该平台群会话 ID 就是纯群号（如 巴巴萝丝:GroupMessage:1027774611）
+            prefix = ""
+        else:
+            for candidate in _GROUP_PREFIXES:
+                if session.startswith(candidate):
+                    prefix = candidate
+                    break
     return f"{platform}:GroupMessage:{prefix}{group_id}"

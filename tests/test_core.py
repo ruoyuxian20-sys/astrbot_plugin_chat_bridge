@@ -141,7 +141,11 @@ def test_group_umo_from_example():
     )
     assert (
         umo.group_umo_from_example("telegram_1:GroupMessage:999", "888")
-        == "telegram_1:GroupMessage:group_888"
+        == "telegram_1:GroupMessage:888"
+    )
+    assert (
+        umo.group_umo_from_example("巴巴萝丝:GroupMessage:1027774611", "949235877")
+        == "巴巴萝丝:GroupMessage:949235877"
     )
     assert umo.group_umo_from_example("aiocqhttp:GroupMessage:group_1", "abc") == ""
     assert (
