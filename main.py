@@ -352,12 +352,22 @@ class ChatBridge(Star):
         if self._is_bot(event):
             return
         text = self._text(event).strip()
-        if not text or text.startswith(("/", "／")):
+        segments = self._all_segments(event)
+        if text.startswith(("/", "／")):
+            return
+        if not text and not segments:
             return
         labels = storage.targets_for(self._state(), event.unified_msg_origin)
         if not labels:
             return
         await self._forward(event, labels)
+
+    def _all_segments(self, event: AstrMessageEvent) -> list:
+        """安全获取消息链段（图片/转发等非文本内容在这里）。"""
+        try:
+            return event.message_obj.message or []
+        except Exception:
+            return []
 
     async def _forward(
         self, event: AstrMessageEvent, labels: list[str]
