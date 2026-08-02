@@ -26,6 +26,12 @@ def test_formatter_empty_sender():
     assert formatter.build_forward_text("", "你好") == "群友：你好"
 
 
+def test_formatter_strips_placeholders():
+    assert formatter.build_forward_text("小明", "[图片] 看看这个 [转发消息]") == "小明：看看这个"
+    assert formatter.build_forward_text("小明", "[At:123] [表情:4] 在吗", show_sender=False) == "在吗"
+    assert formatter.build_forward_text("", "[图片]") == ""
+
+
 # ---------- storage ----------
 
 

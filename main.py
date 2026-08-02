@@ -150,8 +150,10 @@ class ChatBridge(Star):
         """获取 OneBot v11 平台的通用 action 调用器（用于合并转发）。"""
         try:
             bot = getattr(event, "bot", None)
-            api = getattr(bot, "api", None)
-            call_action = getattr(api, "call_action", None)
+            call_action = getattr(bot, "call_action", None)
+            if not callable(call_action):
+                api = getattr(bot, "api", None)
+                call_action = getattr(api, "call_action", None)
             return call_action if callable(call_action) else None
         except Exception:
             return None
@@ -448,13 +450,22 @@ class ChatBridge(Star):
         if nodes and call_action and gid:
             try:
                 await call_action(
-                    "send_forward_msg",
+                    "send_group_forward_msg",
                     group_id=int(gid) if gid.isdigit() else gid,
                     messages=nodes,
                 )
                 return True
             except Exception as e:
                 logger.warning(f"chat_bridge send_forward_msg 失败: {e}")
+                try:
+                    await call_action(
+                        "send_forward_msg",
+                        group_id=int(gid) if gid.isdigit() else gid,
+                        messages=nodes,
+                    )
+                    return True
+                except Exception as e2:
+                    logger.warning(f"chat_bridge send_forward_msg 兜底失败: {e2}")
         # 透传兜底：直接带 forward id / 内联节点发送（部分 OneBot 实现支持）
         if fwd_ids:
             for fid in fwd_ids:
@@ -489,7 +500,7 @@ class ChatBridge(Star):
                 segments = []
             for seg in segments:
                 try:
-                    if str(getattr(seg, "type", "")).lower() != "image":
+                    if not isinstance(seg, Comp.Image):
                         continue
                     parts.extend(self._image_components(seg))
                 except Exception as e:
@@ -517,6 +528,9 @@ class ChatBridge(Star):
         for local in (path, file):
             if local and os.path.exists(local):
                 candidates.append(Comp.Image.fromFileSystem(local))
+        if file and not file.startswith(("http://", "https://")):
+            # OneBot 缓存文件引用（如 xxx.image），由协议端解析
+            candidates.append(Comp.Image(file=file))
         if candidates:
             return candidates
         # 无法重建时，原样带上收到的图片段，交由适配器处理

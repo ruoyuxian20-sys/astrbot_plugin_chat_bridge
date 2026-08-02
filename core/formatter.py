@@ -4,11 +4,17 @@ from __future__ import annotations
 import re
 
 CQ_RE = re.compile(r"\[CQ:[^\]]*\]")
+# AstrBot 对非文本消息段的占位符，如 [图片] / [转发消息] / [At:123] / [表情:1] / [引用消息(...)]
+PLACEHOLDER_RE = re.compile(
+    r"\[(?:图片|转发消息|表情:[^\]]*|At:[^\]]*|引用消息[^\]]*)\]"
+)
 
 
 def sanitize_text(text: str) -> str:
-    """去掉 CQ 码与首尾空白。"""
-    return CQ_RE.sub("", text).strip()
+    """去掉 CQ 码、平台占位符与首尾空白。"""
+    text = CQ_RE.sub("", text)
+    text = PLACEHOLDER_RE.sub("", text)
+    return text.strip()
 
 
 def build_forward_text(
