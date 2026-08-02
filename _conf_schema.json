@@ -1,0 +1,22 @@
+{
+  "show_sender": {
+    "description": "转发普通消息时是否带上原发送者昵称（默认原样转发，不带前缀）。",
+    "type": "bool",
+    "default": false
+  },
+  "forward_images": {
+    "description": "是否转发图片；无法转发时静默跳过。",
+    "type": "bool",
+    "default": true
+  },
+  "forward_merged": {
+    "description": "是否转发合并转发（聊天记录）消息。会尽量以合并记录形式原样转发；无法获取时静默跳过。",
+    "type": "bool",
+    "default": true
+  },
+  "admin_ids": {
+    "description": "管理员兜底 ID 列表（平台管理员之外额外生效），可留空。",
+    "type": "list",
+    "default": []
+  }
+}
