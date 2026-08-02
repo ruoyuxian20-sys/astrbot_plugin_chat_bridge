@@ -7,7 +7,7 @@ sys.path.insert(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
 )
 
-from chat_bridge.core import formatter, forward, policy, storage
+from chat_bridge.core import formatter, forward, policy, storage, umo
 
 # ---------- formatter ----------
 
@@ -125,3 +125,25 @@ def test_forward_unwrap_action_data():
     assert forward.unwrap_action_data({"messages": [1]}) == {"messages": [1]}
     assert forward.unwrap_action_data(None) == {}
     assert forward.unwrap_action_data("x") == {}
+
+
+# ---------- umo ----------
+
+
+def test_group_umo_from_example():
+    assert (
+        umo.group_umo_from_example("aiocqhttp:GroupMessage:group_555", "123456")
+        == "aiocqhttp:GroupMessage:group_123456"
+    )
+    assert (
+        umo.group_umo_from_example("aiocqhttp:PrivateMessage:private_9", "123")
+        == "aiocqhttp:GroupMessage:group_123"
+    )
+    assert (
+        umo.group_umo_from_example("telegram_1:GroupMessage:999", "888")
+        == "telegram_1:GroupMessage:group_888"
+    )
+    assert umo.group_umo_from_example("aiocqhttp:GroupMessage:group_1", "abc") == ""
+    assert (
+        umo.group_umo_from_example("", "123") == "aiocqhttp:GroupMessage:group_123"
+    )

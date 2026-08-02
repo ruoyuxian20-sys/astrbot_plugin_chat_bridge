@@ -13,7 +13,7 @@ try:
 except ImportError:
     from astrbot.api.event import MessageChain
 
-from .core import formatter, forward, policy, storage
+from .core import formatter, forward, policy, storage, umo
 
 _HELP_TEXT = """🔁 群聊转发使用说明
 
@@ -26,6 +26,12 @@ _HELP_TEXT = """🔁 群聊转发使用说明
     把当前群的消息转发到该目标，例如 /转发 绑定 主群
 /转发 解绑 <备注名>
     停止转发到该目标
+
+按群号配置（仅管理员，无需进入对应群）：
+/转发 群目标 <备注名> <目标群号>
+    按群号登记转发目标，例如 /转发 群目标 主群 123456
+/转发 群绑定 <备注名> <源群号>
+    按群号绑定源群，例如 /转发 群绑定 主群 654321
 
 管理：
 /转发 列表
@@ -170,6 +176,12 @@ class ChatBridge(Star):
         elif sub in {"绑定", "桥接", "bind"}:
             async for result in self._bind(event, rest):
                 yield result
+        elif sub in {"群目标", "目标群", "grouptarget"}:
+            async for result in self._reg_group(event, rest):
+                yield result
+        elif sub in {"群绑定", "绑定群", "groupbind"}:
+            async for result in self._bind_group(event, rest):
+                yield result
         elif sub in {"解绑", "unbind"}:
             async for result in self._unbind(event, rest):
                 yield result
@@ -222,6 +234,66 @@ class ChatBridge(Star):
         self._dirty = True
         self._save()
         yield event.plain_result(f"已绑定：当前群 → 「{label}」。")
+
+    async def _reg_group(self, event: AstrMessageEvent, rest: str):
+        """按群号登记转发目标（无需进入目标群）。"""
+        if not self._is_admin(event):
+            yield event.plain_result("仅管理员可以登记转发目标。")
+            return
+        parts = rest.split()
+        if len(parts) < 2:
+            yield event.plain_result("用法：/转发 群目标 <备注名> <目标群号>")
+            return
+        label, group_id = parts[0], parts[1]
+        target_umo = umo.group_umo_from_example(
+            event.unified_msg_origin, group_id
+        )
+        if not target_umo:
+            yield event.plain_result("群号格式不正确（应为数字）。")
+            return
+        state = self._state()
+        previous = state["targets"].get(label)
+        storage.register_target(state, label, target_umo)
+        self._dirty = True
+        self._save()
+        if previous and previous.get("umo") == target_umo:
+            yield event.plain_result(f"目标「{label}」已更新为群 {group_id}。")
+        else:
+            yield event.plain_result(
+                f"已按群号登记目标「{label}」→ 群 {group_id}（{target_umo}）。"
+            )
+
+    async def _bind_group(self, event: AstrMessageEvent, rest: str):
+        """按群号绑定源群（无需进入源群）。"""
+        if not self._is_admin(event):
+            yield event.plain_result("仅管理员可以配置转发规则。")
+            return
+        parts = rest.split()
+        if len(parts) < 2:
+            yield event.plain_result("用法：/转发 群绑定 <备注名> <源群号>")
+            return
+        label, group_id = parts[0], parts[1]
+        state = self._state()
+        if label not in state["targets"]:
+            yield event.plain_result(
+                f"没有找到目标「{label}」，请先登记目标（/转发 群目标 {label} <群号>）"
+            )
+            return
+        source_umo = umo.group_umo_from_example(
+            event.unified_msg_origin, group_id
+        )
+        if not source_umo:
+            yield event.plain_result("群号格式不正确（应为数字）。")
+            return
+        if source_umo == state["targets"][label]["umo"]:
+            yield event.plain_result("不能把群聊转发给它自己。")
+            return
+        storage.add_binding(state, source_umo, label)
+        self._dirty = True
+        self._save()
+        yield event.plain_result(
+            f"已按群号绑定：群 {group_id}（{source_umo}）→ 「{label}」。"
+        )
 
     async def _unbind(self, event: AstrMessageEvent, rest: str):
         if not self._is_admin(event):
