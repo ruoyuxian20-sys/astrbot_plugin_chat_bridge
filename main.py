@@ -67,11 +67,36 @@ class ChatBridge(Star):
             base = getattr(self.context, "data_dir", None) or "data"
         except Exception:
             base = "data"
+        return os.path.join(base, "chat_bridge", "bridge.json")
+
+    def _legacy_state_path(self) -> str:
+        try:
+            base = getattr(self.context, "data_dir", None) or "data"
+        except Exception:
+            base = "data"
         return os.path.join(base, "plugins", "chat_bridge", "bridge.json")
 
     def _state(self) -> dict:
         if self._state_data is None:
-            self._state_data = storage.load_state(self._state_path())
+            path = self._state_path()
+            if not os.path.exists(path):
+                legacy = self._legacy_state_path()
+                if os.path.exists(legacy):
+                    # 迁移旧版数据目录（位于 data/plugins/chat_bridge，会被 AstrBot 误扫描）
+                    data = storage.load_state(legacy)
+                    try:
+                        storage.save_state(path, data)
+                        os.remove(legacy)
+                        try:
+                            os.rmdir(os.path.dirname(legacy))
+                        except OSError:
+                            pass
+                        logger.info("chat_bridge 规则数据已迁移到 data/chat_bridge/bridge.json")
+                    except Exception as e:
+                        logger.warning(f"chat_bridge 迁移旧数据失败: {e}")
+                    self._state_data = data
+                    return data
+            self._state_data = storage.load_state(path)
         return self._state_data
 
     def _save(self) -> None:
@@ -624,7 +649,7 @@ class ChatBridge(Star):
             return chain
 
     def _image_components(self, seg) -> list:
-        """把收到的图片段转成可发送的图片组件（多策略兜底）。"""
+        """把收到的图片段转成可发送的图片组件（只取最优的一个，避免重复）。"""
         if isinstance(seg, dict):
             data = seg.get("data", {}) or {}
             url = str(data.get("url", "") or "")
@@ -634,18 +659,16 @@ class ChatBridge(Star):
             url = str(getattr(seg, "url", "") or "")
             file = str(getattr(seg, "file", "") or "")
             path = str(getattr(seg, "path", "") or "")
-        candidates = []
-        for candidate in (url, file):
-            if candidate.startswith(("http://", "https://")):
-                candidates.append(Comp.Image.fromURL(candidate))
+        if url.startswith(("http://", "https://")):
+            return [Comp.Image.fromURL(url)]
+        if file.startswith(("http://", "https://")):
+            return [Comp.Image.fromURL(file)]
         for local in (path, file):
             if local and os.path.exists(local):
-                candidates.append(Comp.Image.fromFileSystem(local))
-        if file and not file.startswith(("http://", "https://")):
+                return [Comp.Image.fromFileSystem(local)]
+        if file:
             # OneBot 缓存文件引用（如 xxx.image），由协议端解析
-            candidates.append(Comp.Image(file=file))
-        if candidates:
-            return candidates
+            return [Comp.Image(file=file)]
         # 无法重建时，原样带上收到的图片段，交由适配器处理
         logger.info(
             f"chat_bridge 图片段无可用 url/file/path（url={url!r} file={file!r} path={path!r}），尝试原样转发"
