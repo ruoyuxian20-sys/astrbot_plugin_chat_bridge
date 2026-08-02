@@ -491,12 +491,9 @@ class ChatBridge(Star):
                 try:
                     if str(getattr(seg, "type", "")).lower() != "image":
                         continue
-                    url = getattr(seg, "url", "") or ""
-                    if url.startswith(("http://", "https://")):
-                        parts.append(Comp.Image.fromURL(url))
-                    elif url and os.path.exists(url):
-                        parts.append(Comp.Image.fromFileSystem(url))
-                except Exception:
+                    parts.extend(self._image_components(seg))
+                except Exception as e:
+                    logger.debug(f"chat_bridge 图片段处理跳过: {e}")
                     continue
         if not parts:
             return None
@@ -507,6 +504,26 @@ class ChatBridge(Star):
             for part in parts:
                 chain.append(part)
             return chain
+
+    def _image_components(self, seg) -> list:
+        """把收到的图片段转成可发送的图片组件（多策略兜底）。"""
+        url = str(getattr(seg, "url", "") or "")
+        file = str(getattr(seg, "file", "") or "")
+        path = str(getattr(seg, "path", "") or "")
+        candidates = []
+        for candidate in (url, file):
+            if candidate.startswith(("http://", "https://")):
+                candidates.append(Comp.Image.fromURL(candidate))
+        for local in (path, file):
+            if local and os.path.exists(local):
+                candidates.append(Comp.Image.fromFileSystem(local))
+        if candidates:
+            return candidates
+        # 无法重建时，原样带上收到的图片段，交由适配器处理
+        logger.debug(
+            f"chat_bridge 图片段无可用 url/file，尝试原样转发: {seg}"
+        )
+        return [seg]
 
     def _plain_chain(self, text: str):
         """纯文本消息链。"""
