@@ -150,10 +150,10 @@ class ChatBridge(Star):
         """获取 OneBot v11 平台的通用 action 调用器（用于合并转发）。"""
         try:
             bot = getattr(event, "bot", None)
-            call_action = getattr(bot, "call_action", None)
+            api = getattr(bot, "api", None)
+            call_action = getattr(api, "call_action", None)
             if not callable(call_action):
-                api = getattr(bot, "api", None)
-                call_action = getattr(api, "call_action", None)
+                call_action = getattr(bot, "call_action", None)
             return call_action if callable(call_action) else None
         except Exception:
             return None
@@ -370,6 +370,10 @@ class ChatBridge(Star):
         )
         merged = self._merged_segments(event)
         merged_present = bool(merged) and bool(self._cfg("forward_merged", True))
+        logger.info(
+            f"chat_bridge 转发: labels={labels} merged={len(merged)} "
+            f"images={len(self._image_segments(event))} text_len={len(text)}"
+        )
         targets = self._state().get("targets", {})
         for label in labels:
             umo = targets.get(label, {}).get("umo", "")
@@ -383,8 +387,13 @@ class ChatBridge(Star):
                     ok = False
                 if ok:
                     continue
+                # 合并转发失败：尝试平台原样转发单条消息
+                raw_ok = await self._forward_raw_by_id(event, umo)
+                if raw_ok:
+                    continue
                 # 无法原样转发合并记录：源消息若有纯文本则原样转发，否则静默跳过
                 if text:
+                    logger.info(f"chat_bridge 合并转发失败，回退转发文本到 {label}")
                     try:
                         await self._send(event, umo, self._plain_chain(text))
                     except Exception as e:
@@ -394,11 +403,18 @@ class ChatBridge(Star):
                 continue
             chain = self._build_chain(text, event)
             if chain is None:
+                # 无法重建（如图片无可用字段）：尝试按消息 ID 原样转发
+                raw_ok = await self._forward_raw_by_id(event, umo)
+                if raw_ok:
+                    continue
                 continue
             try:
                 await self._send(event, umo, chain)
             except Exception as e:
                 logger.warning(f"chat_bridge 转发到 {label} 失败: {e}")
+                raw_ok = await self._forward_raw_by_id(event, umo)
+                if raw_ok:
+                    continue
 
     def _merged_segments(self, event: AstrMessageEvent) -> list:
         """提取消息链中的合并转发相关段（Forward / Node / Nodes）。"""
@@ -406,9 +422,29 @@ class ChatBridge(Star):
             segments = event.message_obj.message or []
         except Exception:
             return []
-        return [
-            seg for seg in segments if isinstance(seg, (Comp.Forward, Comp.Node, Comp.Nodes))
-        ]
+        result = []
+        for seg in segments:
+            if isinstance(seg, (Comp.Forward, Comp.Node, Comp.Nodes)) or (
+                isinstance(seg, dict)
+                and str(seg.get("type", "")).lower() in ("forward", "node", "nodes")
+            ):
+                result.append(seg)
+        return result
+
+    def _image_segments(self, event: AstrMessageEvent) -> list:
+        """提取消息链中的图片段（组件或原始 dict）。"""
+        try:
+            segments = event.message_obj.message or []
+        except Exception:
+            return []
+        result = []
+        for seg in segments:
+            if isinstance(seg, Comp.Image) or (
+                isinstance(seg, dict)
+                and str(seg.get("type", "")).lower() in ("image", "img")
+            ):
+                result.append(seg)
+        return result
 
     async def _send_merged(
         self, event: AstrMessageEvent, umo: str, segments: list
@@ -420,33 +456,50 @@ class ChatBridge(Star):
                 inline.extend(seg.nodes or [])
             elif isinstance(seg, Comp.Node):
                 inline.append(seg)
+            elif isinstance(seg, dict):
+                seg_type = str(seg.get("type", "")).lower()
+                if seg_type == "nodes":
+                    inline.extend(seg.get("data", {}).get("messages", []) or [])
+                elif seg_type == "node":
+                    inline.append(seg)
         fwd_ids = [
             str(getattr(seg, "id", "") or "")
             for seg in segments
             if isinstance(seg, Comp.Forward)
         ]
+        fwd_ids += [
+            str((seg.get("data", {}) or {}).get("id", "") or "")
+            for seg in segments
+            if isinstance(seg, dict)
+            and str(seg.get("type", "")).lower() == "forward"
+        ]
         call_action = self._onebot_call_action(event)
         gid = forward.extract_group_id(umo)
+        logger.info(
+            f"chat_bridge 合并转发: fwd_ids={fwd_ids} inline={len(inline)} "
+            f"call_action={'可用' if call_action else '不可用'} gid={gid}"
+        )
         nodes: list = []
         if call_action:
             if inline:
                 for node in inline:
                     try:
-                        nodes.append(node.toDict())
+                        if isinstance(node, dict):
+                            nodes.append(node)
+                        else:
+                            nodes.append(node.toDict())
                     except Exception:
                         continue
             elif fwd_ids and fwd_ids[0]:
-                try:
-                    ret = await call_action(
-                        "get_forward_msg", message_id=fwd_ids[0]
-                    )
-                    data = forward.unwrap_action_data(ret)
-                    messages = (
-                        data.get("messages", []) if isinstance(data, dict) else []
-                    )
-                    nodes = forward.build_nodes_payload(messages)
-                except Exception as e:
-                    logger.warning(f"chat_bridge 获取合并转发内容失败: {e}")
+                nodes = await self._fetch_forward_nodes(
+                    call_action, fwd_ids[0]
+                )
+                if not nodes:
+                    message_id = self._event_message_id(event)
+                    if message_id:
+                        nodes = await self._fetch_forward_nodes(
+                            call_action, message_id
+                        )
         if nodes and call_action and gid:
             try:
                 await call_action(
@@ -454,6 +507,7 @@ class ChatBridge(Star):
                     group_id=int(gid) if gid.isdigit() else gid,
                     messages=nodes,
                 )
+                logger.info(f"chat_bridge 已通过 send_group_forward_msg 转发 {len(nodes)} 个节点")
                 return True
             except Exception as e:
                 logger.warning(f"chat_bridge send_forward_msg 失败: {e}")
@@ -463,6 +517,7 @@ class ChatBridge(Star):
                         group_id=int(gid) if gid.isdigit() else gid,
                         messages=nodes,
                     )
+                    logger.info(f"chat_bridge 已通过 send_forward_msg 转发 {len(nodes)} 个节点")
                     return True
                 except Exception as e2:
                     logger.warning(f"chat_bridge send_forward_msg 兜底失败: {e2}")
@@ -487,6 +542,48 @@ class ChatBridge(Star):
             except Exception:
                 pass
         return False
+
+    def _event_message_id(self, event: AstrMessageEvent) -> str:
+        try:
+            return str(getattr(event.message_obj, "message_id", "") or "")
+        except Exception:
+            return ""
+
+    async def _fetch_forward_nodes(self, call_action, forward_id: str) -> list:
+        """拉取合并转发记录并转成节点列表；失败返回空列表。"""
+        try:
+            ret = await call_action("get_forward_msg", message_id=forward_id)
+            data = forward.unwrap_action_data(ret)
+            messages = data.get("messages", []) if isinstance(data, dict) else []
+            return forward.build_nodes_payload(messages)
+        except Exception as e:
+            logger.warning(f"chat_bridge 获取合并转发内容失败: {e}")
+            return []
+
+    async def _forward_raw_by_id(self, event: AstrMessageEvent, umo: str) -> bool:
+        """用平台原生的单条消息转发动作原样转发（forward_group_single_msg）。"""
+        call_action = self._onebot_call_action(event)
+        if not call_action:
+            return False
+        gid = forward.extract_group_id(umo)
+        if not gid:
+            return False
+        message_id = self._event_message_id(event)
+        if not message_id:
+            return False
+        try:
+            await call_action(
+                "forward_group_single_msg",
+                group_id=int(gid) if gid.isdigit() else gid,
+                message_id=message_id,
+            )
+            logger.info(
+                f"chat_bridge 已通过 forward_group_single_msg 原样转发消息 {message_id}"
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"chat_bridge forward_group_single_msg 失败: {e}")
+            return False
 
     def _build_chain(self, text: str, event: AstrMessageEvent):
         """构造转发消息链：文本 + 图片（尽力转发，失败占位）。"""
@@ -518,9 +615,15 @@ class ChatBridge(Star):
 
     def _image_components(self, seg) -> list:
         """把收到的图片段转成可发送的图片组件（多策略兜底）。"""
-        url = str(getattr(seg, "url", "") or "")
-        file = str(getattr(seg, "file", "") or "")
-        path = str(getattr(seg, "path", "") or "")
+        if isinstance(seg, dict):
+            data = seg.get("data", {}) or {}
+            url = str(data.get("url", "") or "")
+            file = str(data.get("file", "") or "")
+            path = str(data.get("path", "") or "")
+        else:
+            url = str(getattr(seg, "url", "") or "")
+            file = str(getattr(seg, "file", "") or "")
+            path = str(getattr(seg, "path", "") or "")
         candidates = []
         for candidate in (url, file):
             if candidate.startswith(("http://", "https://")):
@@ -534,8 +637,8 @@ class ChatBridge(Star):
         if candidates:
             return candidates
         # 无法重建时，原样带上收到的图片段，交由适配器处理
-        logger.debug(
-            f"chat_bridge 图片段无可用 url/file，尝试原样转发: {seg}"
+        logger.info(
+            f"chat_bridge 图片段无可用 url/file/path（url={url!r} file={file!r} path={path!r}），尝试原样转发"
         )
         return [seg]
 
