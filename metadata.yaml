@@ -2,7 +2,7 @@ name: chat_bridge
 display_name: 群聊转发（测试中）
 short_desc: 把指定群聊的消息自动转发到另一个群聊，支持文本与图片，规则仅管理员可配置。
 desc: 群聊转发插件：在目标群登记会话、在源群绑定转发规则后，源群消息会实时推送到目标群。支持一个源群转发到多个目标群、文本与图片转发；转发内容由机器人发送，不会形成转发回环。
-version: 1.3.0
+version: 1.3.1
 author: ruoyuxian20-sys
 repo: https://github.com/ruoyuxian20-sys/astrbot_plugin_chat_bridge
 astrbot_version: ">=4.9.2"

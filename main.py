@@ -51,7 +51,7 @@ class ChatBridge(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
-        self._state: dict | None = None
+        self._state_data: dict | None = None
         self._dirty = False
 
     # ---------- 工具 ----------
@@ -70,9 +70,9 @@ class ChatBridge(Star):
         return os.path.join(base, "plugins", "chat_bridge", "bridge.json")
 
     def _state(self) -> dict:
-        if self._state is None:
-            self._state = storage.load_state(self._state_path())
-        return self._state
+        if self._state_data is None:
+            self._state_data = storage.load_state(self._state_path())
+        return self._state_data
 
     def _save(self) -> None:
         if not self._dirty:
@@ -364,7 +364,7 @@ class ChatBridge(Star):
         text = formatter.build_forward_text(
             self._sender_name(event),
             content,
-            bool(self._cfg("show_sender", True)),
+            bool(self._cfg("show_sender", False)),
         )
         merged = self._merged_segments(event)
         merged_present = bool(merged) and bool(self._cfg("forward_merged", True))
