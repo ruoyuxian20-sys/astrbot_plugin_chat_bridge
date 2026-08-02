@@ -414,6 +414,10 @@ class ChatBridge(Star):
             umo = targets.get(label, {}).get("umo", "")
             if not umo:
                 continue
+            # 优先：平台原生按消息 ID 原样转发（保留嵌套合并转发/图片等原始形态）
+            raw_ok = await self._forward_raw_by_id(event, umo)
+            if raw_ok:
+                continue
             if merged_present:
                 try:
                     ok = await self._send_merged(event, umo, merged)
@@ -617,7 +621,7 @@ class ChatBridge(Star):
             )
             return True
         except Exception as e:
-            logger.warning(f"chat_bridge forward_group_single_msg 失败: {e}")
+            logger.debug(f"chat_bridge forward_group_single_msg 不可用: {e}")
             return False
 
     def _build_chain(self, text: str, event: AstrMessageEvent):
